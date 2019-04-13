@@ -17,35 +17,17 @@ library(gbm)
 library(xgboost)
 library(dplyr)
 
-# Clear environment
-rm(list=ls())
-
-# FOLDER DEFINITIONS
-dirs <- read.csv("C:/Users/B19883/Documents/R_AUTORUNS/SOURCE.csv", sep = ";", stringsAsFactors = F)
-dir <- dirs[1,"Source"]
-dir_upl <- dirs[2, "Source"]
-dir_dashboard <- dirs[3, "Source"]
-
-
-##subdirectories
-raw <- paste0(dir, "raw/")
-clean <- paste0(dir,"clean/")
-output <- paste0(dir,"output/")
-
-
-source(paste0(dir, "Gamma_Functions.R"))
-
-DBRefresh()
-DBMerge()
-
-
 
 # DATA IMPORT
-data_raw <- fread(paste0(clean, "Database.csv"))
-data_raw$datetime <- as.POSIXct((data_raw$datetime), format = "%Y-%m-%d %T")
+data_raw <- read.csv2(paste0("Database.csv"), dec = ",", sep =",")
+data_raw$datetime <- as.POSIXct((data_raw$datetime), format = "%Y-%m-%d %T", tz = "CET")
 
-d <- data.table(data_raw)
-d[ForecastOrNot == 0, max(datetime)]
+data_raw$P <- as.numeric(as.character(data_raw$P))
+data_raw$GHI <- as.numeric(as.character(data_raw$GHI))
+data_raw$TOA <- as.numeric(as.character(data_raw$TOA))
+
+
+data_raw <- data.table(data_raw)
 
 data <- data_raw[!duplicated(data_raw)]
 
@@ -54,30 +36,29 @@ d[ForecastOrNot %in% c(0, 1), sum(P), by = .(as.Date(datetime), pp)]
 data[pp == "szigetvar_gamma" & as.Date(datetime, tz = "CET") == "2019-03-04", ]
 
 
-data_raw$month <- month(data_raw$datetime)
-
-
-# 
-# ##taking out 2019-03-08 and 03-15 for testing
-# data_raw$date <- as.Date(data_raw$datetime, tz = "CET")
-# data_test <- data_raw %>% filter(date %in% c(as.Date("2019-03-08", tz = "CET"),
-#                                              as.Date("2019-03-15", tz = "CET"),
-#                                              as.Date("2019-03-21", tz = "CET")))
-# 
-# '%notin%' <- function(x,y)!('%in%'(x,y))
-# 
-# data_raw <- data_raw %>% filter(date %notin% c(as.Date("2019-03-08", tz = "CET"),
-#                                              as.Date("2019-03-15", tz = "CET"),
-#                                              as.Date("2019-03-21", tz = "CET")))
+data$month <- month(data$datetime)
 
 
 
+##taking out 2019-04-10
+data$date <- as.Date(data$datetime, tz = "CET")
+data_valid <- data %>% filter(date %in% c(as.Date("2019-03-08", tz = "CET"),
+                                             as.Date("2019-03-15", tz = "CET"),
+                                             as.Date("2019-04-10", tz = "CET")))
 
-data <- data_raw %>% select(P, month, cloudCover, temperature, humidity, icon, precipProbability, precipIntensity, dewPoint, apparentTemperature, Rad, ForecastOrNot,
+'%notin%' <- function(x,y)!('%in%'(x,y))
+
+data <- data %>% filter(date %notin% c(as.Date("2019-03-08", tz = "CET"),
+                                             as.Date("2019-03-15", tz = "CET"),
+                                             as.Date("2019-04-10", tz = "CET")))
+
+
+
+
+data <- data %>% select(P, month, cloudCover, temperature, humidity, icon, precipProbability, precipIntensity, dewPoint, apparentTemperature, Rad, ForecastOrNot,
                             GHI, TOA, month)
 
 data$month <- month(data$month)
-
 
 #data <- data %>% filter(P != 0)
 # Creating training and testing samples
@@ -110,7 +91,7 @@ simple_tree_model <- train(P ~ .,
                            control = list(maxdepth = 15))
 simple_tree_model
 
-rpart.plot::rpart.plot(simple_tree_model[["finalModel"]], cex=0.5)
+# rpart.plot::rpart.plot(simple_tree_model[["finalModel"]], cex=0.5)
 
 
 #################### RANDOM FOREST ######################
@@ -119,10 +100,10 @@ rpart.plot::rpart.plot(simple_tree_model[["finalModel"]], cex=0.5)
 # Simple model
 set.seed(20190115)
 tune_grid <- expand.grid(
-  .mtry = 10,
+  .mtry = c(5,10,12,
   .splitrule = "variance",
-  .min.node.size = c(10)
-)
+  .min.node.size = c(5, 10, 15, 20, 25)
+))
 
 rf_model <- train(
   formula(P ~ .),
@@ -139,17 +120,17 @@ rf_model
 
 
 gbm_grid <- expand.grid(n.trees = c(100, 500, 1000), 
-                        interaction.depth = c(5), 
-                        shrinkage = c(0.1),
-                        n.minobsinnode = c(5))
+                        interaction.depth = c(5, 7, 10, 15), 
+                        shrinkage = c(0.05, 0.1, 0.3),
+                        n.minobsinnode = c(5, 10, 15))
 set.seed(857)
 gbm_model <- train(P ~ .,
                    method = "gbm",
                    data = data_train,
                    trControl = train_control,
-                   preProcess = c("center", "scale", "pca"),
+                   preProcess = c("center", "scale"),
                    tuneGrid = gbm_grid,
-                   verbose = FALSE # gbm by default prints too much output
+                   verbose = FALSE
 )
 gbm_model
 
@@ -157,18 +138,18 @@ gbm_model
 
 
 xgb_grid <- expand.grid(nrounds = c(500, 1000),
-                        max_depth = c(5, 7),
-                        eta = c(0.05, 0.07),
+                        max_depth = c(5, 7, 10, 15),
+                        eta = c(0.05, 0.07, 0.09),
                         gamma = 0,
-                        colsample_bytree = c(0.7, 0.8),
+                        colsample_bytree = c(0.7, 0.8, 0.9),
                         min_child_weight = 1, # similar to n.minobsinnode
-                        subsample = c(0.5))
+                        subsample = c(0.5, 0.7, 0.9))
 set.seed(857)
 xgboost_model <- train(P ~ .,
                        method = "xgbTree",
                        data = data_train,
                        trControl = train_control,
-                       preProcess = c("center", "scale", "pca"),
+                       preProcess = c("center", "scale"),
                        tuneGrid = xgb_grid)
 xgboost_model
 
