@@ -100,10 +100,10 @@ simple_tree_model
 # Simple model
 set.seed(20190115)
 tune_grid <- expand.grid(
-  .mtry = c(5,10,12,
+  .mtry = c(5,10,12),
   .splitrule = "variance",
   .min.node.size = c(5, 10, 15, 20, 25)
-))
+)
 
 rf_model <- train(
   formula(P ~ .),
